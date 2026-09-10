@@ -111,6 +111,21 @@ function parseTime(text) {
   return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
 }
 
+function toDisplayTime(value, lang) {
+  if (!value) return "";
+  const nextDay = /^Next day\s+/i.test(value);
+  const clean = value.replace(/^Next day\s+/i, "");
+  const m = clean.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return value;
+  if (lang === "ja") return `${nextDay ? "翌日 " : ""}${clean}`;
+
+  const h24 = Number(m[1]);
+  const minute = m[2];
+  const suffix = h24 >= 12 ? "PM" : "AM";
+  const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+  return `${nextDay ? "Next day " : ""}${h12}:${minute} ${suffix}`;
+}
+
 function calculateReturnTime(plan, pickup) {
   if (!plan || !pickup) return null;
   if (plan.code === "overnight_a") return "Next day 12:00";
@@ -126,6 +141,16 @@ function calculateReturnTime(plan, pickup) {
   return `${nextDay ? "Next day " : ""}${hh}:${mm}`;
 }
 
+function wantsStaff(text) {
+  const t = (text || "").trim().toLowerCase();
+  return /^(staff|human|person|operator|スタッフ|店員|人と話したい|スタッフと話したい)$/.test(t);
+}
+
+function wantsAutoResume(text) {
+  const t = (text || "").trim().toLowerCase();
+  return /^(start|resume|auto|再開|自動再開)$/.test(t);
+}
+
 function planMessage(lang, bikeType, qty) {
   const plans = PLANS[bikeType];
 
@@ -139,7 +164,8 @@ function planMessage(lang, bikeType, qty) {
       `4. Overnight A — 翌日12:00まで — ¥${plans["4"].price.toLocaleString()}/台`,
       `5. Overnight B — 翌日20:00まで — ¥${plans["5"].price.toLocaleString()}/台`,
       "",
-      "1〜5で返信してください。"
+      "1〜5で返信してください。",
+      "スタッフと直接やり取りしたい場合は「スタッフ」と送ってください。"
     ].join("\n");
   }
 
@@ -149,10 +175,11 @@ function planMessage(lang, bikeType, qty) {
     `1. 1 Hour — ¥${plans["1"].price.toLocaleString()}/bike`,
     `2. 3 Hours — ¥${plans["2"].price.toLocaleString()}/bike`,
     `3. All Day / up to 12 hours — ¥${plans["3"].price.toLocaleString()}/bike`,
-    `4. Overnight A — Return by 12:00 next day — ¥${plans["4"].price.toLocaleString()}/bike`,
-    `5. Overnight B — Return by 20:00 next day — ¥${plans["5"].price.toLocaleString()}/bike`,
+    `4. Overnight A — Return by 12:00 PM next day — ¥${plans["4"].price.toLocaleString()}/bike`,
+    `5. Overnight B — Return by 8:00 PM next day — ¥${plans["5"].price.toLocaleString()}/bike`,
     "",
-    "Reply with 1–5."
+    "Reply with 1–5.",
+    "To speak with a staff member, send STAFF at any time."
   ].join("\n");
 }
 
@@ -166,7 +193,9 @@ function initialMessage(lang, mode, a) {
       `電動自転車: ${a.electric}台`,
       "",
       "まず車種と台数を送ってください。",
-      "例:『電動2台』"
+      "例:『電動2台』",
+      "",
+      "質問がある、またはスタッフと直接やり取りしたい場合は「スタッフ」と送ってください。"
     ].join("\n");
   }
 
@@ -178,7 +207,9 @@ function initialMessage(lang, mode, a) {
     `Electric bikes: ${a.electric}`,
     "",
     "First, please send the bike type and quantity.",
-    'Example: “2 electric bikes”'
+    'Example: “2 electric bikes”',
+    "",
+    "If you have a question or want to speak with a staff member, send STAFF at any time."
   ].join("\n");
 }
 
@@ -191,11 +222,12 @@ function confirmationMessage(lang, state) {
       `・車種: ${state.bike_type === "electric" ? "電動自転車" : "普通自転車"}`,
       `・台数: ${state.bike_quantity}台`,
       `・プラン: ${state.plan_label || state.rental_plan}`,
-      `・受取時間: ${state.pickup_time}`,
-      `・返却予定: ${state.return_time}`,
+      `・受取時間: ${toDisplayTime(state.pickup_time, "ja")}`,
+      `・返却予定: ${toDisplayTime(state.return_time, "ja")}`,
       `・合計: ¥${total.toLocaleString()}`,
       "",
-      "この内容で仮予約に進めます。次にお支払い方法をご案内します。"
+      "この内容で仮予約に進めます。次にお支払い方法をご案内します。",
+      "スタッフと直接やり取りしたい場合は「スタッフ」と送ってください。"
     ].join("\n");
   }
 
@@ -204,11 +236,12 @@ function confirmationMessage(lang, state) {
     `• Bike: ${state.bike_type === "electric" ? "Electric" : "Standard"}`,
     `• Quantity: ${state.bike_quantity}`,
     `• Plan: ${state.plan_label || state.rental_plan}`,
-    `• Pick-up: ${state.pickup_time}`,
-    `• Expected return: ${state.return_time}`,
+    `• Pick-up: ${toDisplayTime(state.pickup_time, "en")}`,
+    `• Expected return: ${toDisplayTime(state.return_time, "en")}`,
     `• Total: ¥${total.toLocaleString()}`,
     "",
-    "We can now proceed to a provisional reservation. Next, we’ll send payment instructions."
+    "We can now proceed to a provisional reservation. Next, we’ll send payment instructions.",
+    "To speak with a staff member, send STAFF at any time."
   ].join("\n");
 }
 
@@ -255,6 +288,44 @@ export async function POST(request) {
     const stale = previous?.updated_at && Date.now() - new Date(previous.updated_at).getTime() > 12 * 60 * 60 * 1000;
     const lang = (!previous || stale) ? detectLanguage(text) : (previous.language || detectLanguage(text));
 
+    if (wantsStaff(text)) {
+      const handoffReply = lang === "ja"
+        ? "スタッフ対応に切り替えました。ご質問やご希望をこのまま送ってください。スタッフが確認後に返信します。"
+        : "We've switched this chat to staff support. Please send your question or request here, and a staff member will reply after checking it.";
+
+      const handoffSave = await supabase.from("wati_conversations").upsert({
+        wa_id: waId,
+        channel_phone_number: channelPhoneNumber || previous?.channel_phone_number || null,
+        language: lang,
+        status: "human_handoff",
+        bike_type: previous?.bike_type || null,
+        bike_quantity: previous?.bike_quantity || null,
+        rental_plan: previous?.rental_plan || null,
+        unit_price: previous?.unit_price || null,
+        total_price: previous?.total_price || null,
+        pickup_time: previous?.pickup_time || null,
+        return_time: previous?.return_time || null,
+        child_seat: null,
+        helmet: null,
+        last_inbound_text: text,
+        updated_at: new Date().toISOString()
+      }, { onConflict: "wa_id" });
+
+      if (handoffSave.error) throw handoffSave.error;
+      const sent = await sendWatiMessage(waId, handoffReply, channelPhoneNumber);
+      return NextResponse.json({ ok: true, status: "human_handoff", sent });
+    }
+
+    if (previous?.status === "human_handoff" && !stale) {
+      if (wantsAutoResume(text)) {
+        await supabase.from("wati_conversations").update({ status: "collecting_bike", updated_at: new Date().toISOString() }).eq("wa_id", waId);
+        const reply = initialMessage(lang, mode, a);
+        const sent = await sendWatiMessage(waId, reply, channelPhoneNumber);
+        return NextResponse.json({ ok: true, status: "collecting_bike", sent });
+      }
+      return NextResponse.json({ ok: true, ignored: true, reason: "human_handoff" });
+    }
+
     let state = (!previous || stale) ? {} : { ...previous };
     let status = (!previous || stale || previous.status === "completed") ? "collecting_bike" : previous.status;
     let reply;
@@ -295,7 +366,7 @@ export async function POST(request) {
         status = "pickup_time";
         reply = lang === "ja"
           ? `プラン「${plan.label}」ですね。受取時間を教えてください。例: 10:00`
-          : `Great — ${plan.label}. What time would you like to pick up the bike(s)? Example: 10:00`;
+          : `Great — ${plan.label}. What time would you like to pick up the bike(s)? Example: 10:00 AM`;
       }
     } else if (status === "pickup_time") {
       const pickup = parseTime(text);
@@ -303,7 +374,7 @@ export async function POST(request) {
       if (!pickup) {
         reply = lang === "ja"
           ? "受取時間を 10:00 のように送ってください。"
-          : "Please send the pick-up time like 10:00.";
+          : "Please send the pick-up time like 10:00 AM or 2:30 PM.";
       } else {
         state.pickup_time = pickup;
         const plan = Object.values(PLANS[state.bike_type] || {}).find((p) => p.code === state.rental_plan);
@@ -350,5 +421,5 @@ export async function POST(request) {
 }
 
 export async function GET() {
-  return NextResponse.json({ ok: true, service: "wati-webhook", flow: "plan-based-v3-no-accessories" });
+  return NextResponse.json({ ok: true, service: "wati-webhook", flow: "plan-v4-ampm-staff-handoff" });
 }
