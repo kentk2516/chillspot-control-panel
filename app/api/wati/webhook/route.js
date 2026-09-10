@@ -1,6 +1,45 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
+const recentMessages = globalThis.__watiRecentMessages || new Map();
+globalThis.__watiRecentMessages = recentMessages;
+
+function cleanupRecentMessages(now = Date.now()) {
+  for (const [key, time] of recentMessages.entries()) {
+    if (now - time > 120000) recentMessages.delete(key);
+  }
+}
+
+function getDedupeKey(payload) {
+  const explicitId =
+    payload?.id ||
+    payload?.messageId ||
+    payload?.whatsappMessageId ||
+    payload?.localMessageId ||
+    payload?.conversationId;
+
+  if (explicitId) return `id:${explicitId}`;
+
+  const waId = payload?.waId || "unknown";
+  const text = typeof payload?.text === "string" ? payload.text.trim() : JSON.stringify(payload?.text || "");
+  const created = payload?.created || payload?.timestamp || payload?.time || "";
+  return `fallback:${waId}:${created}:${text}`;
+}
+
+function isDuplicate(payload) {
+  const now = Date.now();
+  cleanupRecentMessages(now);
+  const key = getDedupeKey(payload);
+  const previous = recentMessages.get(key);
+
+  if (previous && now - previous < 120000) {
+    return { duplicate: true, key };
+  }
+
+  recentMessages.set(key, now);
+  return { duplicate: false, key };
+}
+
 function getSupabaseAdmin() {
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -89,16 +128,21 @@ export async function POST(request) {
       waId: payload?.waId,
       channelPhoneNumber: payload?.channelPhoneNumber,
       type: payload?.type,
-      text: payload?.text
+      text: payload?.text,
+      id: payload?.id || payload?.messageId || payload?.whatsappMessageId || payload?.localMessageId || null
     });
 
     if (!["message", "messageReceived"].includes(eventType)) {
-      console.log("WATI webhook ignored: event type", eventType);
       return NextResponse.json({ ok: true, ignored: true, eventType });
     }
     if (payload?.owner === true) {
-      console.log("WATI webhook ignored: outbound");
       return NextResponse.json({ ok: true, ignored: true, reason: "outbound" });
+    }
+
+    const dedupe = isDuplicate(payload);
+    if (dedupe.duplicate) {
+      console.log("WATI duplicate webhook ignored", { key: dedupe.key });
+      return NextResponse.json({ ok: true, ignored: true, reason: "duplicate" });
     }
 
     const waId = payload?.waId;
