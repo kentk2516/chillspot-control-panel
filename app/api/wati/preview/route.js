@@ -12,8 +12,8 @@ function getSupabaseAdmin() {
 function buildReply({ mode, inventory, accessories }) {
   const labels = {
     open: "The shop is currently open, so automatic self-service replies are OFF.",
-    away: "We are currently away from the shop, but self-service rental is available.",
-    closed: "The shop is currently closed. Self-service rental may still be available.",
+    away: "Our staff are currently away from the shop, but self-service rental is available.",
+    closed: "The shop is currently closed, but self-service rental may still be available.",
     self_service: "We are currently operating by self-service rental."
   };
 
@@ -31,18 +31,23 @@ function buildReply({ mode, inventory, accessories }) {
     autoReplyEnabled: mode !== "open",
     mode,
     reply: [
-      "Hello! This is CHILL SPOT Kawaguchiko 👋",
+      "Hi! Thanks for contacting CHILL SPOT Kawaguchiko 👋",
       labels[mode] || "Self-service rental is currently available.",
       "",
-      `Standard bikes: ${available(standard)} available`,
-      `Electric bikes: ${available(electric)} available`,
-      `Child seat: ${optionText(child)}`,
-      `Helmet: ${optionText(helmet)}`,
+      "Current availability:",
+      `• Standard bikes: ${available(standard)}`,
+      `• Electric bikes: ${available(electric)}`,
+      `• Child seat: ${optionText(child)}`,
+      `• Helmet: ${optionText(helmet)}`,
       "",
-      "Please reply with:",
-      "1) Standard or Electric",
-      "2) Number of bikes",
-      "3) Rental time / return time"
+      "To arrange your rental, please send:",
+      "1. Bike type (Standard / Electric)",
+      "2. Number of bikes",
+      "3. Pick-up time",
+      "4. Expected return time",
+      "5. Whether you need a child seat or helmet",
+      "",
+      "We’ll guide you through the next steps after we receive these details."
     ].join("\n")
   };
 }
