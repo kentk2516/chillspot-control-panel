@@ -10,6 +10,9 @@ const MODE_LABELS = {
   self_service: "セルフ貸出"
 };
 
+const VEHICLE_ORDER = { standard: 0, electric: 1, ypj: 2, scooter: 3 };
+const ACCESSORY_ORDER = { child_seat: 0, helmet: 1 };
+
 const MODE_HELP = {
   open: "通常営業。スタッフ対応を基本にします。",
   away: "スタッフ不在。セルフレンタル案内を自動化します。",
@@ -105,49 +108,79 @@ export default function Home() {
     if (profileRes.error) setMessage(profileRes.error.message);
     setProfile(profileRes.data || null);
     setSettings(settingsRes.data || null);
-    setInventory(inventoryRes.data || []);
-    setAccessories(accRes.data || []);
+    const stableInventory = [...(inventoryRes.data || [])].sort(
+      (a, b) => (VEHICLE_ORDER[a.vehicle_types?.code] ?? 99) - (VEHICLE_ORDER[b.vehicle_types?.code] ?? 99)
+    );
+    const stableAccessories = [...(accRes.data || [])].sort(
+      (a, b) => (ACCESSORY_ORDER[a.code] ?? 99) - (ACCESSORY_ORDER[b.code] ?? 99)
+    );
+    setInventory(stableInventory);
+    setAccessories(stableAccessories);
     setBusy(false);
   }
 
   async function setMode(mode) {
+    const previous = settings;
+    setSettings(prev => prev ? { ...prev, operation_mode: mode } : prev);
     setBusy(true); setMessage("");
     const { error } = await supabase.rpc("set_operation_mode", { p_mode: mode });
-    if (error) setMessage(error.message);
-    await loadAll();
+    if (error) {
+      setSettings(previous);
+      setMessage(error.message);
+    }
+    setBusy(false);
   }
 
   async function updateVehicle(row, patch) {
-    setBusy(true); setMessage("");
     const enabled = patch.enabled ?? row.enabled;
     const qty = Math.max(0, patch.available_quantity ?? row.available_quantity);
+    const previous = inventory;
+    setInventory(items => items.map(item =>
+      item.id === row.id ? { ...item, enabled, available_quantity: qty } : item
+    ));
+    setBusy(true); setMessage("");
     const { error } = await supabase.rpc("set_self_inventory", {
       p_vehicle_type_code: row.vehicle_types.code,
       p_enabled: enabled,
       p_available_quantity: qty
     });
-    if (error) setMessage(error.message);
-    await loadAll();
+    if (error) {
+      setInventory(previous);
+      setMessage(error.message);
+    }
+    setBusy(false);
   }
 
   async function updateAccessory(row, patch) {
-    setBusy(true); setMessage("");
     const enabled = patch.self_service_enabled ?? row.self_service_enabled;
     const qty = Math.max(0, patch.available_quantity ?? row.available_quantity);
+    const previous = accessories;
+    setAccessories(items => items.map(item =>
+      item.id === row.id ? { ...item, self_service_enabled: enabled, available_quantity: qty } : item
+    ));
+    setBusy(true); setMessage("");
     const { error } = await supabase.rpc("set_accessory_inventory", {
       p_code: row.code,
       p_enabled: enabled,
       p_available_quantity: qty
     });
-    if (error) setMessage(error.message);
-    await loadAll();
+    if (error) {
+      setAccessories(previous);
+      setMessage(error.message);
+    }
+    setBusy(false);
   }
 
   async function setAutoKeys(next) {
+    const previous = settings;
+    setSettings(prev => prev ? { ...prev, auto_release_keys: next } : prev);
     setBusy(true); setMessage("");
     const { error } = await supabase.rpc("set_auto_release_keys", { p_enabled: next });
-    if (error) setMessage(error.message);
-    await loadAll();
+    if (error) {
+      setSettings(previous);
+      setMessage(error.message);
+    }
+    setBusy(false);
   }
 
   if (authMode === "update") {
