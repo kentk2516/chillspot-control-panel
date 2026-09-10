@@ -13,18 +13,31 @@ async function sendWatiMessage(waId, text, channelPhoneNumber) {
   const base = process.env.WATI_API_ENDPOINT?.replace(/\/$/, "");
   const rawToken = process.env.WATI_ACCESS_TOKEN || "";
   const token = rawToken.replace(/^Bearer\s+/i, "").trim();
-  if (!base || !token || !waId) return { skipped: true };
+
+  console.log("WATI send config", {
+    hasBase: !!base,
+    hasToken: !!token,
+    waId,
+    channelPhoneNumber: channelPhoneNumber || null
+  });
+
+  if (!base || !token || !waId) {
+    return { skipped: true, hasBase: !!base, hasToken: !!token, hasWaId: !!waId };
+  }
 
   const params = new URLSearchParams({ messageText: text });
   if (channelPhoneNumber) params.set("channelPhoneNumber", channelPhoneNumber);
 
-  const res = await fetch(`${base}/api/v1/sendSessionMessage/${encodeURIComponent(waId)}?${params.toString()}`, {
+  const url = `${base}/api/v1/sendSessionMessage/${encodeURIComponent(waId)}?${params.toString()}`;
+  const res = await fetch(url, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }
   });
 
   const body = await res.text();
-  return { ok: res.ok, status: res.status, body: body.slice(0, 500) };
+  const result = { ok: res.ok, status: res.status, body: body.slice(0, 1000) };
+  console.log("WATI send result", result);
+  return result;
 }
 
 function buildReply({ mode, inventory, accessories }) {
@@ -70,10 +83,21 @@ export async function POST(request) {
     const payload = await request.json();
     const eventType = payload?.eventType;
 
+    console.log("WATI webhook received", {
+      eventType,
+      owner: payload?.owner,
+      waId: payload?.waId,
+      channelPhoneNumber: payload?.channelPhoneNumber,
+      type: payload?.type,
+      text: payload?.text
+    });
+
     if (!["message", "messageReceived"].includes(eventType)) {
+      console.log("WATI webhook ignored: event type", eventType);
       return NextResponse.json({ ok: true, ignored: true, eventType });
     }
     if (payload?.owner === true) {
+      console.log("WATI webhook ignored: outbound");
       return NextResponse.json({ ok: true, ignored: true, reason: "outbound" });
     }
 
@@ -93,6 +117,7 @@ export async function POST(request) {
     if (accessoriesRes.error) throw accessoriesRes.error;
 
     const mode = settingsRes.data?.operation_mode;
+    console.log("WATI operation mode", mode);
     if (mode === "open") {
       return NextResponse.json({ ok: true, ignored: true, reason: "store_open" });
     }
@@ -100,6 +125,7 @@ export async function POST(request) {
     const reply = buildReply({ mode, inventory: inventoryRes.data, accessories: accessoriesRes.data });
     const sent = await sendWatiMessage(waId, reply, channelPhoneNumber);
 
+    console.log("WATI webhook complete", { sent });
     return NextResponse.json({ ok: true, sent });
   } catch (error) {
     console.error("WATI webhook error", error);
