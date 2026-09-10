@@ -121,6 +121,11 @@ function wantsStaff(text) {
   return /^(staff|human|person|operator|スタッフ|店員|人と話したい|スタッフと話したい)$/.test(t);
 }
 
+function wantsCash(text) {
+  const t = (text || "").trim().toLowerCase();
+  return /^(cash|cash payment|pay cash|cash please|現金|現金払い|現金で|現金希望|現金払い希望)$/.test(t);
+}
+
 function wantsAutoResume(text) {
   const t = (text || "").trim().toLowerCase();
   return /^(start|resume|auto|再開|自動再開)$/.test(t);
@@ -205,7 +210,7 @@ function confirmationMessage(lang, state) {
     `・返却予定: ${toDisplayTime(state.return_time, "ja")}`,
     `・合計: ¥${total.toLocaleString()}`,
     "",
-    "この内容で仮予約に進めます。次にお支払い方法をご案内します。",
+    "お支払い方法をご案内します。カード決済をご希望の場合はこのままお進みください。現金払いをご希望の場合は「現金」と送ってください。",
     "スタッフと直接やり取りしたい場合は「スタッフ」と送ってください。"
   ].join("\n");
   return [
@@ -217,8 +222,8 @@ function confirmationMessage(lang, state) {
     `• Expected return: ${toDisplayTime(state.return_time, "en")}`,
     `• Total: ¥${total.toLocaleString()}`,
     "",
-    "We can now proceed to a provisional reservation. Next, we’ll send payment instructions.",
-    "To speak with a staff member, send STAFF at any time."
+    "Next is payment. If you prefer to pay by cash, send CASH and a staff member will take over from here.",
+    "To speak with a staff member for any other reason, send STAFF at any time."
   ].join("\n");
 }
 
@@ -270,15 +275,20 @@ export async function POST(request) {
     const stale = previous?.updated_at && Date.now() - new Date(previous.updated_at).getTime() > 12 * 60 * 60 * 1000;
     const lang = (!previous || stale) ? detectLanguage(text) : (previous.language || detectLanguage(text));
 
-    if (wantsStaff(text)) {
+    if (wantsStaff(text) || wantsCash(text)) {
       const state = previous && !stale ? { ...previous } : {};
       const saved = await saveConversation(supabase, waId, channelPhoneNumber, lang, "staff_handoff", state, text);
       if (saved.error) throw saved.error;
-      const reply = lang === "ja"
-        ? "スタッフ対応に切り替えました。ご質問やご希望をこのまま送ってください。スタッフが確認後に返信します。自動案内に戻る場合は「再開」と送ってください。"
-        : "You’re now connected to staff support. Please send your question or request here and a staff member will reply after checking it. To return to the automated rental guide, send START.";
+      const cash = wantsCash(text);
+      const reply = cash
+        ? (lang === "ja"
+            ? "現金払いをご希望ですね。ここからはスタッフが対応します。少々お待ちください。必要な確認がある場合はスタッフからこのチャットでご連絡します。"
+            : "You’d like to pay by cash. A staff member will take over from here. Please wait a moment; staff will reply in this chat if any confirmation is needed.")
+        : (lang === "ja"
+            ? "スタッフ対応に切り替えました。ご質問やご希望をこのまま送ってください。スタッフが確認後に返信します。自動案内に戻る場合は「再開」と送ってください。"
+            : "You’re now connected to staff support. Please send your question or request here and a staff member will reply after checking it. To return to the automated rental guide, send START.");
       const sent = await sendWatiMessage(waId, reply, channelPhoneNumber);
-      return NextResponse.json({ ok: true, status: "staff_handoff", sent });
+      return NextResponse.json({ ok: true, status: "staff_handoff", reason: cash ? "cash_payment" : "staff_requested", sent });
     }
 
     if (previous?.status === "staff_handoff" && !wantsAutoResume(text)) {
@@ -296,17 +306,19 @@ export async function POST(request) {
 
     if (status === "choose_bike_type") {
       const choice = (text.match(/^\s*([12])\s*$/) || [])[1];
-      if (choice) {
+      if (!choice) {
+        reply = initialMessage(lang, mode, a);
+      } else {
         state.bike_type = choice === "1" ? "standard" : "electric";
         const available = a[state.bike_type];
         if (available <= 0) {
-          reply = lang === "ja" ? "申し訳ありません。現在この車種はセルフレンタル在庫がありません。別の車種をお選びください。\n\n1. 普通自転車\n2. 電動自転車" : "Sorry, this bike type is currently unavailable for self-service rental. Please choose another type.\n\n1. Standard bike\n2. Electric bike";
+          reply = lang === "ja"
+            ? "申し訳ありません。現在この車種はセルフレンタル在庫がありません。別の車種をお選びください。\n\n1. 普通自転車\n2. 電動自転車"
+            : "Sorry, this bike type is currently unavailable for self-service rental. Please choose another type.\n\n1. Standard bike\n2. Electric bike";
         } else {
           status = "choose_quantity";
           reply = quantityMessage(lang, state.bike_type, available);
         }
-      } else {
-        reply = initialMessage(lang, mode, a);
       }
     } else if (status === "choose_quantity") {
       const m = text.match(/^\s*(\d{1,2})\s*$/);
@@ -315,7 +327,9 @@ export async function POST(request) {
       if (!qty || qty < 1) {
         reply = quantityMessage(lang, state.bike_type, available);
       } else if (qty > available) {
-        reply = lang === "ja" ? `現在は最大${available}台まで利用できます。1〜${available}の数字で台数を送ってください。` : `Up to ${available} bike(s) are available. Please reply with a number from 1 to ${available}.`;
+        reply = lang === "ja"
+          ? `現在は最大${available}台まで利用できます。1〜${available}の数字で台数を送ってください。`
+          : `Up to ${available} bike(s) are available. Please reply with a number from 1 to ${available}.`;
       } else {
         state.bike_quantity = qty;
         status = "choose_plan";
@@ -339,7 +353,9 @@ export async function POST(request) {
     } else if (status === "pickup_time") {
       const pickup = parseTime(text);
       if (!pickup) {
-        reply = lang === "ja" ? "受取時間を 10:00 のように送ってください。" : "Please send the pick-up time like 10:00 AM or 2:30 PM.";
+        reply = lang === "ja"
+          ? "受取時間を 10:00 のように送ってください。"
+          : "Please send the pick-up time like 10:00 AM or 2:30 PM.";
       } else {
         state.pickup_time = pickup;
         const plan = Object.values(PLANS[state.bike_type] || {}).find((p) => p.code === state.rental_plan);
@@ -368,5 +384,5 @@ export async function POST(request) {
 }
 
 export async function GET() {
-  return NextResponse.json({ ok: true, service: "wati-webhook", flow: "numbered-selection-v5" });
+  return NextResponse.json({ ok: true, service: "wati-webhook", flow: "numbered-selection-v6-cash-handoff" });
 }
