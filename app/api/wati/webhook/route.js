@@ -11,7 +11,8 @@ function getSupabaseAdmin() {
 
 async function sendWatiMessage(waId, text, channelPhoneNumber) {
   const base = process.env.WATI_API_ENDPOINT?.replace(/\/$/, "");
-  const token = process.env.WATI_ACCESS_TOKEN;
+  const rawToken = process.env.WATI_ACCESS_TOKEN || "";
+  const token = rawToken.replace(/^Bearer\s+/i, "").trim();
   if (!base || !token || !waId) return { skipped: true };
 
   const params = new URLSearchParams({ messageText: text });
@@ -36,9 +37,7 @@ function buildReply({ mode, inventory, accessories }) {
     self_service: "We are currently operating by self-service rental."
   };
 
-  const byCode = Object.fromEntries(
-    (inventory || []).map((r) => [r.vehicle_types?.code, r])
-  );
+  const byCode = Object.fromEntries((inventory || []).map((r) => [r.vehicle_types?.code, r]));
   const standard = byCode.standard || byCode.normal || byCode.city || null;
   const electric = byCode.electric || byCode.ebike || null;
 
@@ -70,7 +69,6 @@ export async function POST(request) {
     const payload = await request.json();
     const eventType = payload?.eventType;
 
-    // WATI has used both `message` and `messageReceived` naming across webhook versions.
     if (!["message", "messageReceived"].includes(eventType)) {
       return NextResponse.json({ ok: true, ignored: true, eventType });
     }
@@ -85,10 +83,8 @@ export async function POST(request) {
     const supabase = getSupabaseAdmin();
     const [settingsRes, inventoryRes, accessoriesRes] = await Promise.all([
       supabase.from("store_settings").select("operation_mode").limit(1).single(),
-      supabase.from("self_service_inventory")
-        .select("enabled,available_quantity,reserved_quantity,vehicle_types(code,name_ja,name_en)"),
-      supabase.from("rental_accessories")
-        .select("code,self_service_enabled,available_quantity,reserved_quantity")
+      supabase.from("self_service_inventory").select("enabled,available_quantity,reserved_quantity,vehicle_types(code,name_ja,name_en)"),
+      supabase.from("rental_accessories").select("code,self_service_enabled,available_quantity,reserved_quantity")
     ]);
 
     if (settingsRes.error) throw settingsRes.error;
@@ -100,11 +96,7 @@ export async function POST(request) {
       return NextResponse.json({ ok: true, ignored: true, reason: "store_open" });
     }
 
-    const reply = buildReply({
-      mode,
-      inventory: inventoryRes.data,
-      accessories: accessoriesRes.data
-    });
+    const reply = buildReply({ mode, inventory: inventoryRes.data, accessories: accessoriesRes.data });
     const sent = await sendWatiMessage(waId, reply, channelPhoneNumber);
 
     return NextResponse.json({ ok: true, sent });
